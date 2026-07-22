@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/mascot.png" alt="replayd mascot" height="160">
+</p>
+
 # replayd
 
 Resumable Server-Sent Events on SQLite. A durable event log, **Last-Event-ID replay on reconnect**, and per-topic client tracking.
