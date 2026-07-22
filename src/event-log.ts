@@ -124,9 +124,9 @@ export class EventLog {
       [stableId, type, topic, json(payload), createdAt],
     );
     const row = (await exec(this.db, "select * from live_event_log where event_id = ?", [stableId])).rows[0];
-    // The mania original stored a compacted "ref" payload here for one event
-    // type and re-hydrated it from a companion table on read; that projection
-    // coupling is dropped, so the stored JSON is the payload verbatim.
+    // The stored JSON is the payload verbatim. If you ever need to compact a
+    // large payload into a reference and rehydrate it on read, do it in your
+    // own publish/read wrappers; the log stays a plain append-only store.
     const event = rowToReplayEvent(row);
     if (Number(result.rowsAffected ?? 0) > 0 && !this.tailing) {
       this.dispatch(event);

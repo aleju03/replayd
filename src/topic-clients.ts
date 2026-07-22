@@ -40,8 +40,8 @@ export class TopicClientTracker {
   }
 }
 
-// A topic is an arbitrary string, so just trim and bound its length (the mania
-// original also uppercased and sliced to a 2-char country code; dropped).
+// A topic is an arbitrary string, so just trim and bound its length. Do not
+// uppercase or otherwise canonicalize it: topics are opaque identifiers.
 function normalizeTopic(topic: string): string {
   return topic.trim().slice(0, MAX_TOPIC_LENGTH);
 }

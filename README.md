@@ -4,8 +4,6 @@ Resumable Server-Sent Events on SQLite. A durable event log, **Last-Event-ID rep
 
 "replayd" = replay daemon. It is the small piece you keep when you want browser SSE that survives a dropped connection: every event is appended to one SQLite table with a monotonic sequence, that sequence is the SSE `id`, and when a client reconnects with its `Last-Event-ID` it gets exactly the events it missed, in order, before the live stream resumes. You bring the payloads and the HTTP server.
 
-Extracted from the live SSE backend of [mania-tracker.com](https://mania-tracker.com), where reconnecting browsers replay missed score events against a durable `live_event_log`.
-
 ## Why
 
 - **Reconnects do not lose events.** The browser `EventSource` sends `Last-Event-ID` automatically on reconnect. replayd resumes from that sequence: hello frame, replay the gap, then live. No client bookkeeping.
