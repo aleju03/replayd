@@ -4,16 +4,19 @@
 
 # replayd
 
-Resumable Server-Sent Events on SQLite. A durable event log, **Last-Event-ID replay on reconnect**, and per-topic client tracking.
+Resumable Server-Sent Events on SQLite. Every event appends to a log table whose row sequence becomes the SSE `id`, so a browser that reconnects with `Last-Event-ID` gets exactly the events it missed, in order, before the live stream resumes.
 
-"replayd" = replay daemon. It is the small piece you keep when you want browser SSE that survives a dropped connection: every event is appended to one SQLite table with a monotonic sequence, that sequence is the SSE `id`, and when a client reconnects with its `Last-Event-ID` it gets exactly the events it missed, in order, before the live stream resumes. You bring the payloads and the HTTP server.
+The name is "replay daemon". It's the small piece you keep when you want browser SSE that survives a dropped connection without putting a broker in the middle. You bring the payloads and the HTTP server; replayd owns the log, the replay, and the per-topic fan-out.
 
-## Why
+## What you actually get
 
-- **Reconnects do not lose events.** The browser `EventSource` sends `Last-Event-ID` automatically on reconnect. replayd resumes from that sequence: hello frame, replay the gap, then live. No client bookkeeping.
-- **One SQLite file.** The log is an append-only table with an autoincrement `sequence` and a unique `event_id` (append is idempotent by that id). No broker, no Redis, no per-message pricing.
-- **Topics, with a broadcast lane.** Publish to a topic and only that topic's subscribers see it. Publish with `topic: null` and every subscriber sees it. Subscribe with no topic to receive all topics (a global aggregate).
-- **Server/worker split.** One process can append (a worker) while another polls the table with `startTail()` and fans new rows out to its own SSE connections, so a write on any connection or process reaches every reader exactly once.
+The browser's `EventSource` already does the hard part: it reconnects on its own and sends `Last-Event-ID` when it does. Most servers throw that header away. replayd treats it as a cursor into a durable log, which turns the platform's built-in reconnect into real resume semantics with zero client bookkeeping.
+
+The log is one append-only SQLite table with an autoincrement `sequence` and a unique `event_id`, so appends are idempotent and there's no Redis in the picture, and no per-message pricing either.
+
+Topics scope delivery. Publish to `"room-42"` and only that topic's subscribers see it; publish to `null` and everyone does. A subscriber with no topic gets the global aggregate.
+
+When ingest and serving live in different processes, `startTail()` lets the serving process poll the table and fan out rows a worker wrote elsewhere. A write from any process reaches every reader exactly once.
 
 ## Install
 
@@ -21,7 +24,7 @@ Resumable Server-Sent Events on SQLite. A durable event log, **Last-Event-ID rep
 npm install @aleju03/replayd
 ```
 
-Requires Node 18+ (the SSE handler and examples use global `fetch` / `http`). Storage is `@libsql/client`, so a `file:` path, `:memory:`, or a remote Turso URL all work. Use a `file:` URL if you want replay to survive a restart.
+Requires Node 18+ (the SSE handler and examples use global `fetch` / `http`). Storage is `@libsql/client`, which means a `file:` path, `:memory:`, or a remote Turso URL all work. Use a `file:` URL if replay should survive a restart.
 
 ## Quick start
 
@@ -46,7 +49,7 @@ await hub.publish("room-42", { text: "hello" });          // only room-42 subscr
 await hub.publish(null, { notice: "maintenance in 10m" }); // broadcast to everyone
 ```
 
-In the browser it is just `EventSource`. Reconnect and replay are handled by the platform and the server:
+In the browser it's just `EventSource`; reconnect and replay are handled by the platform and the server:
 
 ```js
 const es = new EventSource("https://app.example.com/events?topic=room-42");
@@ -59,7 +62,7 @@ es.addEventListener("message", (e) => {
 
 ## The resume story
 
-Each event carries the SSE frame:
+Each event goes out as an SSE frame:
 
 ```
 id: 128
@@ -71,15 +74,15 @@ The `id` is the row's `sequence`. When a client connects:
 
 1. A `hello` frame reports the resume sequence.
 2. If the request carries `Last-Event-ID` (a header the browser sets automatically, or `?lastEventId=` for manual clients), replayd calls `replay(topic, sinceSequence)` and writes every missed event, in `sequence` order, capped at `replayLimit` (default 100).
-3. Then the client is subscribed to the live fan-out.
+3. Then the client joins the live fan-out.
 
-Heartbeats (default every 15s) are sent with **no `id` line on purpose**: an id on a heartbeat would overwrite the browser's `Last-Event-ID` cursor with a heartbeat marker and break replay on the next reconnect. Heartbeats carry liveness only, never a resume point. Pass an optional `heartbeatData` hook to attach your own freshness signal to each one.
+Heartbeats (default every 15s) are sent with no `id` line, and that's deliberate: an id on a heartbeat would overwrite the browser's `Last-Event-ID` cursor with a heartbeat marker and quietly break replay on the next reconnect. Heartbeats carry liveness only, never a resume point. Pass an optional `heartbeatData` hook to attach your own freshness signal to each one.
 
 `handleSse` options: `path` (default `/events`), `topicParam` (default `topic`), `allowedOrigins` (`string[] | "*"`), `replayLimit` (default 100), `heartbeatMs` (default 15000), and `heartbeatData(topic)`.
 
 ## Server/worker split with startTail
 
-When ingest runs in a different process from the one serving SSE, the serving process cannot dispatch in memory (the append happened elsewhere). Instead it tails the log:
+When ingest runs in a different process from the one serving SSE, the serving process can't dispatch in memory because the append happened elsewhere. So it tails the log instead:
 
 ```ts
 // worker process: appends only, never serves SSE
@@ -91,7 +94,7 @@ const server = new EventHub(db);
 const stop = server.startTail(250); // poll every 250ms, forward new rows to SSE clients
 ```
 
-`startTail` pins its cursor at the current head, so it forwards only events created after it starts (reconnecting clients get their own backlog via replay-on-connect, not the tailer). While a hub is tailing, `publish()` skips its in-process dispatch so the poller stays the single delivery path and nothing is delivered twice. Call the returned function to stop.
+`startTail` pins its cursor at the current head, so it forwards only events created after it starts; reconnecting clients get their backlog via replay-on-connect, not from the tailer. While a hub is tailing, `publish()` skips its in-process dispatch so the poller stays the single delivery path and nothing arrives twice. Call the returned function to stop.
 
 ## API
 
@@ -111,7 +114,7 @@ hub.log;      // the underlying EventLog
 hub.clients;  // the underlying TopicClientTracker
 ```
 
-`publish` is idempotent by `eventId`: a retried publish with the same id neither duplicates the row nor re-delivers to live clients. Omit it and a stable id is generated.
+`publish` is idempotent by `eventId`: a retried publish with the same id neither duplicates the row nor re-delivers to live clients. Omit it and a stable id is generated for you.
 
 A `ReplayEvent` is `{ sequence, event_id, type, topic, payload, created_at }`.
 
