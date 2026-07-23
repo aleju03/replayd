@@ -18,7 +18,7 @@ Resumable Server-Sent Events on SQLite. A durable event log, **Last-Event-ID rep
 ## Install
 
 ```bash
-npm install replayd
+npm install @aleju03/replayd
 ```
 
 Requires Node 18+ (the SSE handler and examples use global `fetch` / `http`). Storage is `@libsql/client`, so a `file:` path, `:memory:`, or a remote Turso URL all work. Use a `file:` URL if you want replay to survive a restart.
@@ -26,7 +26,7 @@ Requires Node 18+ (the SSE handler and examples use global `fetch` / `http`). St
 ## Quick start
 
 ```ts
-import { EventHub, createDb } from "replayd";
+import { EventHub, createDb } from "@aleju03/replayd";
 import { createServer } from "node:http";
 
 const db = await createDb({ url: "file:events.db" });

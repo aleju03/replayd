@@ -1,10 +1,16 @@
 {
-  "name": "replayd",
+  "name": "@aleju03/replayd",
   "version": "0.1.0",
   "description": "Resumable Server-Sent Events on SQLite: a durable event log, Last-Event-ID replay on reconnect, and per-topic client tracking.",
   "type": "module",
   "license": "MIT",
   "author": "aleju03",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aleju03/replayd.git"
+  },
+  "bugs": "https://github.com/aleju03/replayd/issues",
+  "homepage": "https://github.com/aleju03/replayd#readme",
   "keywords": ["sse", "server-sent-events", "eventsource", "sqlite", "libsql", "resumable", "event-log", "last-event-id"],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,7 +26,8 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "verify": "vitest run && tsc -p tsconfig.json --noEmit",
-    "example": "node --import tsx examples/demo.ts"
+    "example": "node --import tsx examples/demo.ts",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@libsql/client": "^0.17.3"
