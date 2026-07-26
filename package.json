@@ -1,7 +1,7 @@
 {
   "name": "@aleju03/replayd",
-  "version": "0.1.0",
-  "description": "Resumable Server-Sent Events on SQLite: a durable event log, Last-Event-ID replay on reconnect, and per-topic client tracking.",
+  "version": "0.2.0",
+  "description": "Resumable Server-Sent Events on SQLite: a durable event log, Last-Event-ID replay on reconnect, explicit gap signalling, and per-topic client tracking.",
   "type": "module",
   "license": "MIT",
   "author": "aleju03",

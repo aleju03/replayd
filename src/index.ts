@@ -15,6 +15,8 @@ export {
   EventLog,
   type ReplayEvent,
   type EventSink,
+  type RetentionPolicy,
+  type StartTailOptions,
 } from "./event-log.js";
 export {
   TopicClientTracker,
@@ -23,6 +25,7 @@ export {
 export {
   handleSse,
   type HandleSseOptions,
+  type GapPayload,
 } from "./sse.js";
 export {
   EventHub,

@@ -8,12 +8,15 @@ import { createDb, EventHub, type EventHubOptions } from "../src/index.js";
 
 interface SseFrame {
   id?: string;
+  retry?: string;
   event: string;
   data: string;
 }
 
 interface SseClient {
   waitFor(pred: (f: SseFrame) => boolean, timeoutMs?: number): Promise<SseFrame>;
+  /** Every frame received so far; used to assert something was NOT sent. */
+  all(): SseFrame[];
   close(): void;
 }
 
@@ -60,6 +63,9 @@ async function openSse(url: string, headers: Record<string, string> = {}): Promi
         waiters.push({ pred, resolve: (frame) => { clearTimeout(timer); resolve(frame); } });
       });
     },
+    all() {
+      return [...frames];
+    },
     close() {
       controller.abort();
     },
@@ -68,14 +74,16 @@ async function openSse(url: string, headers: Record<string, string> = {}): Promi
 
 function parseFrame(raw: string): SseFrame {
   let id: string | undefined;
+  let retry: string | undefined;
   let event = "message";
   const dataLines: string[] = [];
   for (const line of raw.split("\n")) {
     if (line.startsWith("id:")) id = line.slice(3).trim();
+    else if (line.startsWith("retry:")) retry = line.slice(6).trim();
     else if (line.startsWith("event:")) event = line.slice(6).trim();
     else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
   }
-  return { id, event, data: dataLines.join("\n") };
+  return { id, retry, event, data: dataLines.join("\n") };
 }
 
 async function startHub(sseOverrides: NonNullable<EventHubOptions["sse"]> = {}): Promise<{ hub: EventHub; base: string; server: Server }> {
@@ -235,6 +243,95 @@ describe("sse handler", () => {
     await client.waitFor((f) => f.event === "hello");
     const stats = await hub.stats();
     expect(stats.topics.find((t) => t.topic === "gamma")?.activeClients).toBe(1);
+
+    client.close();
+  });
+
+  it("does not drop an event published during the connect handshake", async () => {
+    const { hub, base, server } = await startHub();
+    servers.push(server);
+    const seed = await hub.publish("alpha", { n: 1 });
+
+    // Let the replay query READ the log, then stall before it returns. An event
+    // published in that window is already too late for the replay result and
+    // would predate the live subscription, so it is the one the old ordering
+    // lost: the handler must subscribe before replaying and buffer it.
+    let replayRan!: () => void;
+    const ran = new Promise<void>((resolve) => { replayRan = resolve; });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const realReplay = hub.log.replay.bind(hub.log);
+    hub.log.replay = async (topic, since, limit) => {
+      const result = await realReplay(topic, since, limit);
+      replayRan();
+      await held;
+      return result;
+    };
+
+    const client = await openSse(`${base}/events?topic=alpha`, { "last-event-id": String(seed.sequence) });
+    await ran;
+    await hub.publish("alpha", { n: 2 });
+    release();
+
+    const frame = await client.waitFor((f) => f.event === "ping" && JSON.parse(f.data).n === 2);
+    expect(JSON.parse(frame.data)).toMatchObject({ n: 2 });
+    // Delivered exactly once: replay and the buffered live copy overlap here.
+    const twos = client.all().filter((f) => f.event === "ping" && JSON.parse(f.data).n === 2);
+    expect(twos).toHaveLength(1);
+
+    client.close();
+  });
+
+  it("emits a gap event and the newest window when the backlog outgrows replayLimit", async () => {
+    const { hub, base, server } = await startHub({ replayLimit: 2 });
+    servers.push(server);
+
+    const seed = await hub.publish("alpha", { n: 0 });
+    for (let n = 1; n <= 5; n += 1) await hub.publish("alpha", { n });
+
+    const client = await openSse(`${base}/events?topic=alpha`, { "last-event-id": String(seed.sequence) });
+    const gap = await client.waitFor((f) => f.event === "gap");
+    // The gap frame is a notice, not a resume point: no id line.
+    expect(gap.id).toBeUndefined();
+    expect(JSON.parse(gap.data)).toMatchObject({
+      resumedFrom: seed.sequence,
+      missedFrom: seed.sequence + 1,
+      missed: 3,
+      replayLimit: 2,
+    });
+
+    // The client is handed the two NEWEST events, not the two oldest: it ends up
+    // current, and its cursor no longer sits behind an undrainable backlog.
+    await client.waitFor((f) => f.event === "ping" && JSON.parse(f.data).n === 5);
+    const delivered = client.all().filter((f) => f.event === "ping").map((f) => JSON.parse(f.data).n);
+    expect(delivered).toEqual([4, 5]);
+
+    client.close();
+  });
+
+  it("replays without a gap event when the backlog exactly fills replayLimit", async () => {
+    const { hub, base, server } = await startHub({ replayLimit: 3 });
+    servers.push(server);
+
+    const seed = await hub.publish("alpha", { n: 0 });
+    for (let n = 1; n <= 3; n += 1) await hub.publish("alpha", { n });
+
+    const client = await openSse(`${base}/events?topic=alpha`, { "last-event-id": String(seed.sequence) });
+    await client.waitFor((f) => f.event === "ping" && JSON.parse(f.data).n === 3);
+    const delivered = client.all().filter((f) => f.event === "ping").map((f) => JSON.parse(f.data).n);
+    expect(delivered).toEqual([1, 2, 3]);
+    expect(client.all().some((f) => f.event === "gap")).toBe(false);
+
+    client.close();
+  });
+
+  it("sends a retry hint when retryMs is set", async () => {
+    const { base, server } = await startHub({ retryMs: 500 });
+    servers.push(server);
+
+    const client = await openSse(`${base}/events?topic=alpha`);
+    const retry = await client.waitFor((f) => f.retry != null);
+    expect(retry.retry).toBe("500");
 
     client.close();
   });

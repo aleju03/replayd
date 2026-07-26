@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Db } from "./db.js";
 import { EventLog } from "./event-log.js";
-import type { EventSink, ReplayEvent } from "./event-log.js";
+import type { EventSink, ReplayEvent, RetentionPolicy, StartTailOptions } from "./event-log.js";
 import { TopicClientTracker } from "./topic-clients.js";
 import type { TopicClientStats } from "./topic-clients.js";
 import { handleSse } from "./sse.js";
@@ -67,8 +67,18 @@ export class EventHub {
     return this.log.latestSequence();
   }
 
-  startTail(intervalMs: number): () => void {
-    return this.log.startTail(intervalMs);
+  startTail(intervalMs: number, options?: StartTailOptions): () => void {
+    return this.log.startTail(intervalMs, options);
+  }
+
+  /** Enforce a retention policy once. Returns the number of events deleted. */
+  prune(policy: RetentionPolicy): Promise<number> {
+    return this.log.prune(policy);
+  }
+
+  /** Enforce a retention policy on an interval (default hourly). Returns a stop fn. */
+  startRetention(policy: RetentionPolicy, intervalMs?: number): () => void {
+    return this.log.startRetention(policy, intervalMs);
   }
 
   async stats(): Promise<HubStats> {

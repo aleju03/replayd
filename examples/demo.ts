@@ -75,9 +75,44 @@ async function main(): Promise<void> {
 
   console.log(`\n    replayed ${missed.length} missed events (the broadcast notice + dave + frank; the US-topic event was correctly skipped)`);
 
-  // 5) Hub stats: the durable head and any tracked topic clients.
+  // 5) A client that falls further behind than replayLimit cannot be handed its
+  //    whole backlog. Rather than quietly skipping the middle, replayd sends a
+  //    gap event naming the lost range and then jumps the client to the newest
+  //    window, so it ends up current instead of stuck behind a backlog it can
+  //    never drain. A second hub over the same db, with a deliberately tiny limit:
+  console.log("\n[5] a client too far behind gets an explicit gap, not a silent hole");
+  const strictHub = new EventHub(db, { defaultType: "score", sse: { allowedOrigins: "*", replayLimit: 2 } });
+  const strictServer = createServer((req, res) => {
+    strictHub.handleSse(req, res).then((handled) => {
+      if (!handled) {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+  });
+  await new Promise<void>((resolve) => strictServer.listen(0, resolve));
+  const strictBase = `http://127.0.0.1:${(strictServer.address() as AddressInfo).port}`;
+
+  const clientC = await openSse(`${strictBase}/events?topic=CR`, { "last-event-id": String(cursor) }, (frame) => {
+    if (frame.event === "gap") console.log(`    gap    -> ${frame.data}`);
+    if (frame.event === "score") console.log(`    recent -> id=${frame.id} ${frame.data}`);
+  });
+  await clientC.waitFor((f) => f.event === "gap");
+  await delay(100);
+  clientC.close();
+  strictServer.close();
+  strictServer.closeAllConnections();
+
+  // 6) Retention: the log is append-only, so something has to bound it. Prune by
+  //    count and/or age, once or on an interval via startRetention().
+  console.log("\n[6] retention keeps the log bounded");
+  console.log(`    events before prune: ${(await hub.replay(null, 0, 1000)).length}`);
+  const dropped = await hub.prune({ maxEvents: 3 });
+  console.log(`    pruned ${dropped}; events after: ${(await hub.replay(null, 0, 1000)).length}`);
+
+  // 7) Hub stats: the durable head and any tracked topic clients.
   const stats = await hub.stats();
-  console.log("\n[5] hub stats:", JSON.stringify(stats));
+  console.log("\n[7] hub stats:", JSON.stringify(stats));
 
   server.close();
   server.closeAllConnections();
